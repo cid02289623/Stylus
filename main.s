@@ -1,5 +1,5 @@
 ;========================
-; main.s  (SPI power/wiring test - slow visible phases)
+; main.s  (SPI WHO_AM_I test)
 ;========================
 #include <xc.inc>
 
