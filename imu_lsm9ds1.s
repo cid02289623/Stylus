@@ -1,148 +1,125 @@
 ;========================
-; imu_lsm9ds1.s  (LSM9DS1 gyro over SPI using MSSP1)
+; imu_lsm9ds1.s  (SPI slow debug with phase markers)
 ;========================
 #include <xc.inc>
 
-global  IMU_SPI_Init
-global  IMU_Gyro_WhoAmI_Test
-global  IMU_Gyro_Config
-global  IMU_Gyro_Read_XL
+global  IMU_Test_Init
+global  IMU_Test_Step
 
-; optional delay (only used for tiny CS settle pauses)
-extrn   LCD_delay_ms
-
-;------------------------
-; Pin choice for CS_G
-; Using RA4 as chip select
-;------------------------
-CSG_LAT     equ LATAbits.LATA4
-CSG_TRIS    equ TRISAbits.TRISA4
-
-;------------------------
-; LSM9DS1 gyro registers
-;------------------------
-WHO_AM_I_XG     equ 0x0F
-CTRL_REG1_G     equ 0x10
-CTRL_REG4       equ 0x1E
-OUT_X_L_G       equ 0x18
-
-; SPI R/W + auto-inc bits (LSM9DS1 style)
-SPI_READ        equ 0x80
-SPI_AUTOINC     equ 0x40
+; CSAG -> RA4
+CSAG_PORT   equ LATA
+CSAG_TRIS   equ TRISA
+CSAG_BIT    equ 4
 
 psect udata_acs
-tmp:    ds 1
+d0: ds 1
+d1: ds 1
+d2: ds 1
+rx: ds 1
 
-psect code
+psect code, class=CODE
 
-;========================
-; IMU_SPI_Init
-; - MSSP1 SPI master, Mode 0-ish (CKP=0, CKE=1)
-; - SCK1=RC3 output, SDO1=RC5 output, SDI1=RC4 input
-; - CS_G on RA4 (manual)
-;========================
-IMU_SPI_Init:
-        ; --- CS pin ---
-        bcf     CSG_TRIS, A          ; RA4 output
-        bsf     CSG_LAT,  A          ; CS inactive high
+;---------------------------------------
+; visible delay (tweak if needed)
+;---------------------------------------
+Delay:
+        movlw   0x20        ; outer loop (tune this)
+        movwf   d0, A
 
-        ; --- SPI pins direction ---
-        bsf     TRISC, 4, A          ; RC4/SDI1 input
-        bcf     TRISC, 3, A          ; RC3/SCK1 output (master)
-        bcf     TRISC, 5, A          ; RC5/SDO1 output
+D0:     movlw   0xFF
+        movwf   d1, A
 
-        ; --- MSSP1 in SPI master mode ---
-        ; SSP1STAT: CKE=1 (transmit on active->idle), SMP=0
-        movlw   b'01000000'          ; CKE=1
-        movwf   SSP1STAT, A
+D1:     movlw   0xFF
+        movwf   d2, A
 
-        ; SSP1CON1:
-        ; SSPEN=1 enable
-        ; CKP=0 idle low
-        ; SSPM=0001 => Fosc/16 (pick slower if your wiring is long)
-        movlw   b'00100001'          ; SSPEN=1, SSPM=0001
-        movwf   SSP1CON1, A
+D2:     decfsz  d2, F, A
+        bra     D2
+
+        decfsz  d1, F, A
+        bra     D1
+
+        decfsz  d0, F, A
+        bra     D0
 
         return
 
-;========================
-; Low-level SPI transfer: W out, W in
-;========================
+;---------------------------------------
+; SPI1 transfer: write W, return W read
+;---------------------------------------
 SPI1_Xfer:
         movwf   SSP1BUF, A
-wait_bf:
-        btfss   SSP1STAT, 0, A       ; BF bit
-        bra     wait_bf
+WB:     btfss   SSP1STAT, 0, A     ; BF
+        bra     WB
         movf    SSP1BUF, W, A
         return
 
-;========================
-; Read one gyro register
-; input: W = reg
-; output: W = data
-;========================
-IMU_Gyro_ReadReg:
-        bcf     CSG_LAT, A                   ; CS low
+IMU_Test_Init:
+        ; PORTJ LEDs output
+        clrf    TRISJ, A
+        clrf    LATJ,  A
 
-        iorlw   SPI_READ                     ; set read bit
-        call    SPI1_Xfer                    ; send address
+        ; CSAG output, idle high
+        bcf     CSAG_TRIS, CSAG_BIT, A
+        bsf     CSAG_PORT, CSAG_BIT, A
+
+        ; MSSP1 pins
+        bsf     TRISC, 4, A        ; RC4 SDI1 (MISO) input
+        bcf     TRISC, 3, A        ; RC3 SCK1 output
+        bcf     TRISC, 5, A        ; RC5 SDO1 (MOSI) output
+
+        ; SPI mode try: CKP=1 idle high, CKE=1
+        movlw   01000000B
+        movwf   SSP1STAT, A
+
+        movlw   00110010B          ; SSPEN=1, CKP=1, Master Fosc/64
+        movwf   SSP1CON1, A
+
+        movf    SSP1BUF, W, A
+        return
+
+;---------------------------------------
+; Step:
+; A) Turn on ONLY LED0 while CS is LOW
+; B) Turn on ONLY LED1, then sample raw MISO and reflect it on LED2
+; C) Do SPI readback and display byte on PORTJ
+;---------------------------------------
+IMU_Test_Step:
+
+; ---- A: CS LOW marker on LED0 ----
+        clrf    LATJ, A
+        bcf     CSAG_PORT, CSAG_BIT, A      ; CS low
+        bsf     LATJ, 0, A                  ; phase marker (may invert on your board)
+        call    Delay
+
+; ---- B: raw MISO check ----
+        clrf    LATJ, A
+        bsf     LATJ, 1, A                  ; phase marker
+
+        ; sample raw RC4 (MISO) -> show on LED2
+        btfsc   PORTC, 4, A
+        bsf     LATJ, 2, A
+        btfss   PORTC, 4, A
+        bcf     LATJ, 2, A
+        call    Delay
+
+; ---- C: SPI byte readback ----
+        clrf    LATJ, A
+        bsf     LATJ, 3, A                  ; phase marker
+
+        ; keep CS low for the transfer
+        bcf     CSAG_PORT, CSAG_BIT, A
 
         movlw   0x00
-        call    SPI1_Xfer                    ; dummy -> read data in W
+        call    SPI1_Xfer
+        movwf   rx, A
 
-        bsf     CSG_LAT, A                   ; CS high
-        return
+        bsf     CSAG_PORT, CSAG_BIT, A      ; CS high
 
-;========================
-; Write one gyro register
-; input: W = reg, tmp = data
-;========================
-IMU_Gyro_WriteReg:
-        bcf     CSG_LAT, A                   ; CS low
-
-        andlw   0x7F                         ; ensure write
-        call    SPI1_Xfer                    ; send address
-
-        movf    tmp, W, A
-        call    SPI1_Xfer                    ; send data
-
-        bsf     CSG_LAT, A                   ; CS high
-        return
-
-;========================
-; IMU_Gyro_WhoAmI_Test
-; returns W = WHO_AM_I_XG
-;========================
-IMU_Gyro_WhoAmI_Test:
-        movlw   WHO_AM_I_XG
-        call    IMU_Gyro_ReadReg
-        return
-
-;========================
-; IMU_Gyro_Config
-; - CTRL_REG1_G = 0x60 : ODR=119Hz, FS=245 dps, BW default
-; - CTRL_REG4   = 0x38 : enable X/Y/Z
-;========================
-IMU_Gyro_Config:
-        ; CTRL_REG1_G
-        movlw   0x60
-        movwf   tmp, A
-        movlw   CTRL_REG1_G
-        call    IMU_Gyro_WriteReg
-
-        ; CTRL_REG4
-        movlw   0x38
-        movwf   tmp, A
-        movlw   CTRL_REG4
-        call    IMU_Gyro_WriteReg
+        ; show rx on LEDs
+        movf    rx, W, A
+        movwf   LATJ, A
+        call    Delay
 
         return
 
-;========================
-; IMU_Gyro_Read_XL
-; returns W = OUT_X_L_G (low byte only)
-;========================
-IMU_Gyro_Read_XL:
-        movlw   OUT_X_L_G
-        call    IMU_Gyro_ReadReg
-        return
+end
