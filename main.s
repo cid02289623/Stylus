@@ -1,27 +1,93 @@
-	#include <xc.inc>
+#include <xc.inc>
 
-psect	code, abs
-	
-main:
-	org	0x0
-	goto	start
+GLOBAL  Start
 
-	org	0x100		    ; Main code starts here at address 0x100
-start:
-	movlw	0xFF
-	movwf	TRISD, A
-	movlw 	0x0
-	movwf	TRISC, A
-	movlw 	0x0		; Port C all outputs
-	bra 	test
-loop:
-	movff 	0x06, PORTC
-	incf 	0x06, W, A
-test:
-	movwf	0x06, A	    ; Test for end of loop condition
-	movf	PORTD, W, A
-	cpfsgt 	0x06, A
-	bra 	loop		    ; Not yet finished goto start of loop again
-	goto 	0x0		    ; Re-run program from start
+PSECT resetVec, class=CODE, reloc=2
+resetVec:
+    goto    Start
 
-	end	main
+PSECT udata_acs
+hb0:        DS 1
+hb1:        DS 1
+hb2:        DS 1
+tick_count: DS 1
+t1_div:     DS 1
+
+PSECT code, class=CODE, reloc=2
+
+Start:
+    ; Make analog-capable pins digital
+    BANKSEL ANCON0
+    clrf    BANKMASK(ANCON0), b
+    clrf    BANKMASK(ANCON1), b
+    clrf    BANKMASK(ANCON2), b
+    movlb   0
+
+    ; RA0 heartbeat LED, RA1 timer LED
+    clrf    LATA, A
+    movlw   0xFC
+    movwf   TRISA, A
+
+    ; Heartbeat preload
+    clrf    hb0, A
+    clrf    hb1, A
+    movlw   0xF0
+    movwf   hb2, A
+
+    ; 25 x 20 ms = 500 ms per toggle
+    movlw   25
+    movwf   t1_div, A
+    clrf    tick_count, A
+
+    ; Timer1 setup
+    clrf    T1GCON, A
+    bcf     TMR1IF              ; NOT: bcf PIR1, TMR1IF, A
+
+    movlw   0x63
+    movwf   TMR1H, A
+    movlw   0xC0
+    movwf   TMR1L, A
+
+    movlw   0x32                ; Fosc/4, 1:8 prescale, RD16=1, off
+    movwf   T1CON, A
+    bsf     TMR1ON              ; simpler bit-symbol style
+
+MainLoop:
+    ; Foreground heartbeat
+    incfsz  hb0, F, A
+    bra     CheckTimer1
+    incfsz  hb1, F, A
+    bra     CheckTimer1
+    incfsz  hb2, F, A
+    bra     CheckTimer1
+
+    btg     LATA, 0, A
+    clrf    hb0, A
+    clrf    hb1, A
+    movlw   0xF0
+    movwf   hb2, A
+
+CheckTimer1:
+    btfss   TMR1IF              ; NOT: btfss PIR1, TMR1IF, A
+    bra     MainLoop
+
+    bcf     TMR1ON
+    bcf     TMR1IF              ; NOT: bcf PIR1, TMR1IF, A
+
+    movlw   0x63
+    movwf   TMR1H, A
+    movlw   0xC0
+    movwf   TMR1L, A
+
+    bsf     TMR1ON
+    incf    tick_count, F, A
+
+    decfsz  t1_div, F, A
+    bra     MainLoop
+
+    movlw   25
+    movwf   t1_div, A
+    btg     LATA, 1, A
+    bra     MainLoop
+
+    END     resetVec
