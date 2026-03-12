@@ -35,6 +35,21 @@
 ; - Timer1 generates a 20 ms processing tick
 ; - Main loop runs ProcessTick once per pending tick
 ; - ProcessTick snapshots latest valid sample into proc_*
+; - ProcessTick sends a temporary debug packet on UART1 TX
+;
+; Debug packet sent once per ProcessTick:
+;   byte 0 = 0xD1 marker
+;   byte 1 = tick_count_l
+;   byte 2 = tick_count_h
+;   byte 3 = proc_gx_l
+;   byte 4 = proc_gx_h
+;   byte 5 = dbg_flags
+;   byte 6 = checksum = sum(bytes 1..5) mod 256
+;
+; dbg_flags:
+;   bit0 = 1 -> new valid sample used this tick
+;   bit0 = 0 -> reused previous sample this tick
+;   bit1 = 1 -> no valid sample exists yet
 ;===========================================================
 
 ;-----------------------------------------------------------
@@ -104,6 +119,9 @@ proc_gy_h:              ds 1
 proc_gz_l:              ds 1
 proc_gz_h:              ds 1
 proc_btn:               ds 1
+
+dbg_flags:              ds 1
+dbg_cksum:              ds 1
 
 ;-----------------------------------------------------------
 ; Code
@@ -181,6 +199,9 @@ Start:
             clrf    proc_gz_h, A
             clrf    proc_btn, A
 
+            clrf    dbg_flags, A
+            clrf    dbg_cksum, A
+
             ; RC7 = RX1 input
             ; RC6 = TX1 output
             ; RC5..RC0 = debug outputs
@@ -201,11 +222,11 @@ Start:
 
             clrf    LATC, A
 
-            ; Configure interrupt mode before enabling sources.
-            bcf     RCON, 7, A         ; IPEN = 0 -> single priority mode
+            ; Single-priority interrupt mode.
+            bcf     RCON, 7, A         ; IPEN = 0
 
-            ; Configure UART1 RX path.
-            call    InitUART1_RX
+            ; Configure UART1 RX/TX path.
+            call    InitUART1
 
             ; Configure Timer1 20 ms tick.
             call    InitTimer1_20ms
@@ -258,22 +279,22 @@ DV_Inner:
             return
 
 ;-----------------------------------------------------------
-; UART1 RX init
+; UART1 init
 ; Assumes Fosc = 64 MHz
-; For 115200 baud with BRGH=1 and BRG16=1:
-; SPBRGH1:SPBRG1 = 0x008A
+; 115200 baud, BRGH=1, BRG16=1, SPBRG = 0x008A
 ;-----------------------------------------------------------
-InitUART1_RX:
+InitUART1:
             ; Enable UART1 peripheral module if PMD disabled it.
             bcf     PMD0, 3, A         ; UART1MD = 0
 
             ; Preserve UART pin directions.
-            bsf     TRISC, 7, A        ; RC7 RX1 input
-            bcf     TRISC, 6, A        ; RC6 TX1 output
+            bsf     TRISC, 7, A        ; RC7 = RX1 input
+            bcf     TRISC, 6, A        ; RC6 = TX1 output
 
             ; Async UART, high-speed baud, 16-bit BRG.
             bcf     TXSTA1, 4, A       ; SYNC = 0
             bsf     TXSTA1, 2, A       ; BRGH = 1
+            bsf     TXSTA1, 5, A       ; TXEN = 1
             bsf     BAUDCON1, 3, A     ; BRG16 = 1
 
             ; Set baud generator for 115200 baud at 64 MHz.
@@ -317,10 +338,10 @@ InitTimer1_20ms:
             ; T1CON = 00110010b
             ; TMR1CS<1:0> = 00 -> internal clock (Fosc/4)
             ; T1CKPS<1:0> = 11 -> 1:8 prescale
-            ; SOSCEN       = 0
-            ; T1SYNC       = 0
-            ; RD16         = 1
-            ; TMR1ON       = 0 for now
+            ; SOSCEN      = 0
+            ; T1SYNC      = 0
+            ; RD16        = 1
+            ; TMR1ON      = 0 for now
             movlw   00110010B
             movwf   T1CON, A
 
@@ -341,15 +362,77 @@ InitTimer1_20ms:
             return
 
 ;-----------------------------------------------------------
+; UART1_WriteByte
+; Input: WREG = byte to send
+; Blocks until TXREG1 is ready, then writes the byte.
+;-----------------------------------------------------------
+UART1_WriteByte:
+TX1_Wait:
+            btfss   PIR1, 4, A         ; TX1IF = 1 when TXREG1 is empty
+            bra     TX1_Wait
+            movwf   TXREG1, A
+            return
+
+;-----------------------------------------------------------
+; DebugSendTick
+; Sends:
+;   byte 0 = 0xD1
+;   byte 1 = tick_count_l
+;   byte 2 = tick_count_h
+;   byte 3 = proc_gx_l
+;   byte 4 = proc_gx_h
+;   byte 5 = dbg_flags
+;   byte 6 = checksum = sum(bytes 1..5) mod 256
+;-----------------------------------------------------------
+DebugSendTick:
+            clrf    dbg_cksum, A
+
+            ; Marker
+            movlw   0xD1
+            call    UART1_WriteByte
+
+            ; tick_count_l
+            movf    tick_count_l, W, A
+            addwf   dbg_cksum, F, A
+            call    UART1_WriteByte
+
+            ; tick_count_h
+            movf    tick_count_h, W, A
+            addwf   dbg_cksum, F, A
+            call    UART1_WriteByte
+
+            ; proc_gx_l
+            movf    proc_gx_l, W, A
+            addwf   dbg_cksum, F, A
+            call    UART1_WriteByte
+
+            ; proc_gx_h
+            movf    proc_gx_h, W, A
+            addwf   dbg_cksum, F, A
+            call    UART1_WriteByte
+
+            ; dbg_flags
+            movf    dbg_flags, W, A
+            addwf   dbg_cksum, F, A
+            call    UART1_WriteByte
+
+            ; checksum
+            movf    dbg_cksum, W, A
+            call    UART1_WriteByte
+
+            return
+
+;-----------------------------------------------------------
 ; ProcessTick
 ; Runs once per pending 20 ms slot.
-; - Provides a visible heartbeat on RC0
-; - If a valid sample exists, snapshots latest_* into proc_*
-; - Clears new_sample after the processing slot consumes it
+; - Toggles RC0 periodically for visible heartbeat
+; - Copies latest valid sample into proc_* for this tick
+; - Marks whether the sample was NEW or REUSED
+; - Sends one debug packet to the PC
 ;-----------------------------------------------------------
 ProcessTick:
             ; Toggle RC0 every 25 ticks.
-            ; 25 * 20 ms = 500 ms, so the LED changes state every 0.5 s.
+            ; 25 * 20 ms = 500 ms, so full blink cycle = 1 s.
             incf    debug_tickdiv, F, A
             movlw   25
             cpfseq  debug_tickdiv, A
@@ -359,13 +442,39 @@ ProcessTick:
             btg     LATC, 0, A
 
 PT_NoToggle:
-            ; If no checksum-valid sample has ever arrived, stop here.
-            movf    sample_valid, W, A
-            bz      PT_Done
+            ; Clear debug flags for this tick.
+            clrf    dbg_flags, A
 
-            ; Snapshot the most recent valid sample into proc_*.
-            ; If no fresh frame arrived since the last tick, latest_* is
-            ; unchanged, so this naturally reuses the previous sample.
+            ; If no checksum-valid sample has ever arrived,
+            ; report "no valid sample yet".
+            movf    sample_valid, W, A
+            bnz     PT_HaveValid
+
+            bsf     dbg_flags, 1, A    ; bit1 = no valid sample yet
+
+            clrf    proc_gx_l, A
+            clrf    proc_gx_h, A
+            clrf    proc_gy_l, A
+            clrf    proc_gy_h, A
+            clrf    proc_gz_l, A
+            clrf    proc_gz_h, A
+            clrf    proc_btn, A
+
+            call    DebugSendTick
+            return
+
+PT_HaveValid:
+            ; If parser set new_sample since the previous tick,
+            ; mark this tick as using a NEW sample.
+            movf    new_sample, W, A
+            bz      PT_ReusedSample
+
+            bsf     dbg_flags, 0, A    ; bit0 = new sample used
+
+PT_ReusedSample:
+            ; Snapshot latest valid sample into proc_*.
+            ; If no fresh frame arrived, latest_* is unchanged,
+            ; so this naturally reuses the previous sample.
             movff   latest_gx_l, proc_gx_l
             movff   latest_gx_h, proc_gx_h
             movff   latest_gy_l, proc_gy_l
@@ -374,11 +483,11 @@ PT_NoToggle:
             movff   latest_gz_h, proc_gz_h
             movff   latest_btn,  proc_btn
 
-            ; "new_sample" means at least one new valid frame arrived
-            ; since the previous processing tick. Clear it now.
+            ; This processing slot has now consumed the "fresh" condition.
             clrf    new_sample, A
 
-PT_Done:
+            ; Send one debug packet for Person B.
+            call    DebugSendTick
             return
 
 ;-----------------------------------------------------------
@@ -404,8 +513,7 @@ ISR_CheckRX:
             btfsc   RCSTA1, 1, A       ; OERR
             bra     ISR_HandleOERR
 
-            ; If framing error occurred, read and discard bad byte so
-            ; receiver can continue with the next one.
+            ; If framing error occurred, read and discard bad byte.
             btfsc   RCSTA1, 2, A       ; FERR
             bra     ISR_HandleFERR
 
@@ -424,7 +532,6 @@ ISR_CheckRX:
             cpfseq  rx_next, A
             bra     ISR_StoreByte
 
-            ; Count software overflow event.
             incf    rx_ovf_count, F, A
             bra     ISR_CheckRX
 
@@ -444,12 +551,11 @@ ISR_StoreByte:
             movf    rx_next, W, A
             movwf   rx_head, A
 
-            ; Count successfully queued bytes.
             incf    rx_ok_count, F, A
             bra     ISR_CheckRX
 
 ISR_HandleFERR:
-            ; Read and discard the bad byte to clear hardware state.
+            ; Read and discard the bad byte to clear receiver state.
             movf    RCREG1, W, A
             incf    rx_ferr_count, F, A
             bra     ISR_CheckRX
@@ -467,7 +573,7 @@ ISR_CheckTMR1:
             bra     ISR_Exit
 
             ; Reload Timer1 for next 20 ms interval.
-            ; With RD16=1, write TMR1H first, then TMR1L.
+            ; With RD16=1, write high byte first, then low byte.
             movlw   0x63
             movwf   TMR1H, A
             movlw   0xC0
