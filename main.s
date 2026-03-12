@@ -1,27 +1,199 @@
-	#include <xc.inc>
+;-----------------------------------------------------------
+; ParserService
+; Consumes bytes from ring buffer and parses 9-byte frames:
+;   byte 0 = 0xAA
+;   byte 1 = Gx low
+;   byte 2 = Gx high
+;   byte 3 = Gy low
+;   byte 4 = Gy high
+;   byte 5 = Gz low
+;   byte 6 = Gz high
+;   byte 7 = button
+;   byte 8 = checksum over bytes 1..7 mod 256
+;-----------------------------------------------------------
+ParserService:
+PS_Loop:
+            ; if rx_head == rx_tail, buffer empty
+            movf    rx_head, W, A
+            cpfseq  rx_tail, A
+            bra     PS_HaveByte
+            return
 
-psect	code, abs
-	
-main:
-	org	0x0
-	goto	start
+PS_HaveByte:
+            ; Pop one byte from ring buffer
+            lfsr    0, rx_buf
+            movf    rx_tail, W, A
+            addwf   FSR0L, F, A
+            btfsc   STATUS, 0, A
+            incf    FSR0H, F, A
 
-	org	0x100		    ; Main code starts here at address 0x100
-start:
-	movlw	0xFF
-	movwf	TRISD, A
-	movlw 	0x0
-	movwf	TRISC, A
-	movlw 	0x0		; Port C all outputs
-	bra 	test
-loop:
-	movff 	0x06, PORTC
-	incf 	0x06, W, A
-test:
-	movwf	0x06, A	    ; Test for end of loop condition
-	movf	PORTD, W, A
-	cpfsgt 	0x06, A
-	bra 	loop		    ; Not yet finished goto start of loop again
-	goto 	0x0		    ; Re-run program from start
+            movf    INDF0, W, A
+            movwf   last_byte, A
 
-	end	main
+            incf    rx_tail, F, A
+            movlw   0x1F
+            andwf   rx_tail, F, A
+
+            ; Dispatch by parser_state
+            movf    parser_state, W, A
+            bz      PS_Search
+
+            movlw   P_GX_L
+            cpfseq  parser_state, A
+            bra     PS_Check2
+            bra     PS_GxL
+
+PS_Check2:
+            movlw   P_GX_H
+            cpfseq  parser_state, A
+            bra     PS_Check3
+            bra     PS_GxH
+
+PS_Check3:
+            movlw   P_GY_L
+            cpfseq  parser_state, A
+            bra     PS_Check4
+            bra     PS_GyL
+
+PS_Check4:
+            movlw   P_GY_H
+            cpfseq  parser_state, A
+            bra     PS_Check5
+            bra     PS_GyH
+
+PS_Check5:
+            movlw   P_GZ_L
+            cpfseq  parser_state, A
+            bra     PS_Check6
+            bra     PS_GzL
+
+PS_Check6:
+            movlw   P_GZ_H
+            cpfseq  parser_state, A
+            bra     PS_Check7
+            bra     PS_GzH
+
+PS_Check7:
+            movlw   P_BTN
+            cpfseq  parser_state, A
+            bra     PS_Check8
+            bra     PS_Btn
+
+PS_Check8:
+            bra     PS_Chk
+
+
+;-----------------------------------------------------------
+; State 0: search for 0xAA
+;-----------------------------------------------------------
+PS_Search:
+            movf    last_byte, W, A
+            xorlw   0xAA
+            bnz     PS_Loop
+
+            clrf    parser_checksum, A
+            movlw   P_GX_L
+            movwf   parser_state, A
+            bra     PS_Loop
+
+
+;-----------------------------------------------------------
+; States 1..7: collect payload bytes and accumulate checksum
+;-----------------------------------------------------------
+PS_GxL:
+            movff   last_byte, stg_gx_l
+            movf    last_byte, W, A
+            addwf   parser_checksum, F, A
+            movlw   P_GX_H
+            movwf   parser_state, A
+            bra     PS_Loop
+
+PS_GxH:
+            movff   last_byte, stg_gx_h
+            movf    last_byte, W, A
+            addwf   parser_checksum, F, A
+            movlw   P_GY_L
+            movwf   parser_state, A
+            bra     PS_Loop
+
+PS_GyL:
+            movff   last_byte, stg_gy_l
+            movf    last_byte, W, A
+            addwf   parser_checksum, F, A
+            movlw   P_GY_H
+            movwf   parser_state, A
+            bra     PS_Loop
+
+PS_GyH:
+            movff   last_byte, stg_gy_h
+            movf    last_byte, W, A
+            addwf   parser_checksum, F, A
+            movlw   P_GZ_L
+            movwf   parser_state, A
+            bra     PS_Loop
+
+PS_GzL:
+            movff   last_byte, stg_gz_l
+            movf    last_byte, W, A
+            addwf   parser_checksum, F, A
+            movlw   P_GZ_H
+            movwf   parser_state, A
+            bra     PS_Loop
+
+PS_GzH:
+            movff   last_byte, stg_gz_h
+            movf    last_byte, W, A
+            addwf   parser_checksum, F, A
+            movlw   P_BTN
+            movwf   parser_state, A
+            bra     PS_Loop
+
+PS_Btn:
+            movff   last_byte, stg_btn
+            movf    last_byte, W, A
+            addwf   parser_checksum, F, A
+            movlw   P_CHK
+            movwf   parser_state, A
+            bra     PS_Loop
+
+
+;-----------------------------------------------------------
+; State 8: checksum compare
+; If valid, commit staged sample to latest_* registers
+;-----------------------------------------------------------
+PS_Chk:
+            movf    last_byte, W, A
+            xorwf   parser_checksum, W, A
+            bnz     PS_BadChecksum
+
+            ; Commit staged bytes only after checksum passes
+            movff   stg_gx_l, latest_gx_l
+            movff   stg_gx_h, latest_gx_h
+            movff   stg_gy_l, latest_gy_l
+            movff   stg_gy_h, latest_gy_h
+            movff   stg_gz_l, latest_gz_l
+            movff   stg_gz_h, latest_gz_h
+            movff   stg_btn,  latest_btn
+
+            movlw   0x01
+            movwf   sample_valid, A
+            movwf   new_sample, A
+
+            incf    frame_ok_count_l, F, A
+            bnz     PS_GoodDone
+            incf    frame_ok_count_h, F, A
+
+PS_GoodDone:
+            clrf    parser_state, A
+            clrf    parser_checksum, A
+            bra     PS_Loop
+
+PS_BadChecksum:
+            incf    frame_badck_count_l, F, A
+            bnz     PS_BadDone
+            incf    frame_badck_count_h, F, A
+
+PS_BadDone:
+            clrf    parser_state, A
+            clrf    parser_checksum, A
+            bra     PS_Loop
