@@ -1,70 +1,22 @@
-# Phase 6 Pilot Test README
+phase 6 python test
 
-## Purpose
+first time only:
+py -m pip install pyserial
 
-This Python script is used to test the **Phase 6 startup calibration** stage of the PIC18 gesture project.
+run:
+py phase6_calibration_tester.py --port COM5 --baud 115200 --trials 12 --bias-gx 120 --bias-gy -80 --startup-frames 75 --startup-noise-gx 20 --startup-noise-gy 20 --trial-noise-gx 10 --trial-noise-gy 10 --csv phase6_pilot.csv
 
-The goal of this test is **not** to prove final gesture classification accuracy.  
-Instead, it is used to verify that the PIC firmware can:
+or if the file is called phase6_pilot_tester.py:
+py phase6_pilot_tester.py --port COM5 --baud 115200 --trials 12 --bias-gx 120 --bias-gy -80 --startup-frames 75 --startup-noise-gx 20 --startup-noise-gy 20 --trial-noise-gx 10 --trial-noise-gy 10 --csv phase6_pilot.csv
 
-1. receive framed UART gyro data,
-2. learn a startup bias for `Gx` and `Gy` while the system is still,
-3. subtract that bias during a no-motion capture,
-4. report the final accumulated `Dx` and `Dy`,
-5. estimate a suitable displacement threshold `Tdisp` from measured no-motion data.
+important:
+press RESET on the PIC during the 3 second delay after starting the script
 
-This supports the Phase 6 objective of building a **data-based threshold**, rather than guessing one.
+if COM5 is wrong:
+change it to the correct COM port
 
----
-
-## Script name
-
-Use whichever filename you saved the script as:
-
-- `phase6_calibration_tester.py`
-- or `phase6_pilot_tester.py`
-
-In the examples below, replace the filename if needed.
-
----
-
-## What the script sends to the PIC
-
-The script sends the same 9-byte UART frame format expected by the PIC firmware:
-
-- byte 0 = `0xAA`
-- byte 1 = `Gx low`
-- byte 2 = `Gx high`
-- byte 3 = `Gy low`
-- byte 4 = `Gy high`
-- byte 5 = `Gz low`
-- byte 6 = `Gz high`
-- byte 7 = button byte
-- byte 8 = checksum over bytes 1..7 mod 256
-
-The script first sends a **startup stillness stream** so the PIC can learn the bias.
-
-It then runs repeated **no-motion button capture trials**, where the input stays close to the learned still value, so the PIC should produce only small accumulated `Dx` and `Dy`.
-
----
-
-## What the PIC should send back
-
-The Phase 6 pilot firmware sends two special UART messages:
-
-### 1. Bias frame after startup calibration
-Format:
-
-- `0xB1`
-- `bias_gx_l`
-- `bias_gx_h`
-- `bias_gy_l`
-- `bias_gy_h`
-- checksum
-
-This lets the Python script print the learned startup bias.
-
-Example:
-
-```text
-PIC learned bias: Gx=115  Gy=-79
+output:
+- learned bias from PIC
+- capture values
+- suggested TDISP
+- csv file called phase6_pilot.csv
