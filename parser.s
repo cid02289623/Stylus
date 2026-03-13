@@ -3,21 +3,21 @@
 
             GLOBAL  ParserService
 
-            GLOBAL  rx_head, rx_tail, rx_buf, last_byte
-            GLOBAL  parser_state, parser_checksum
-            GLOBAL  stg_gx_l, stg_gx_h
-            GLOBAL  stg_gy_l, stg_gy_h
-            GLOBAL  stg_gz_l, stg_gz_h
-            GLOBAL  stg_btn
+            EXTERN  rx_head, rx_tail, rx_buf, last_byte
+            EXTERN  parser_state, parser_checksum
+            EXTERN  stg_gx_l, stg_gx_h
+            EXTERN  stg_gy_l, stg_gy_h
+            EXTERN  stg_gz_l, stg_gz_h
+            EXTERN  stg_btn
 
-            GLOBAL  latest_gx_l, latest_gx_h
-            GLOBAL  latest_gy_l, latest_gy_h
-            GLOBAL  latest_gz_l, latest_gz_h
-            GLOBAL  latest_btn
+            EXTERN  latest_gx_l, latest_gx_h
+            EXTERN  latest_gy_l, latest_gy_h
+            EXTERN  latest_gz_l, latest_gz_h
+            EXTERN  latest_btn
 
-            GLOBAL  sample_valid, new_sample
-            GLOBAL  frame_ok_count_l, frame_ok_count_h
-            GLOBAL  frame_badck_count_l, frame_badck_count_h
+            EXTERN  sample_valid, new_sample
+            EXTERN  frame_ok_count_l, frame_ok_count_h
+            EXTERN  frame_badck_count_l, frame_badck_count_h
 
 ;===========================================================
 ; parser.s
@@ -146,78 +146,57 @@ PS_Search:
 ; States 1..7: collect payload bytes and accumulate checksum
 ;-----------------------------------------------------------
 PS_GxL:
-            ; Save Gx low byte in staging register.
             movff   last_byte, stg_gx_l
-            ; Add byte to checksum accumulator.
             movf    last_byte, W, A
             addwf   parser_checksum, F, A
-            ; Advance parser state.
             movlw   P_GX_H
             movwf   parser_state, A
             bra     PS_Loop
 
 PS_GxH:
-            ; Save Gx high byte in staging register.
             movff   last_byte, stg_gx_h
-            ; Add byte to checksum accumulator.
             movf    last_byte, W, A
             addwf   parser_checksum, F, A
-            ; Advance parser state.
             movlw   P_GY_L
             movwf   parser_state, A
             bra     PS_Loop
 
 PS_GyL:
-            ; Save Gy low byte in staging register.
             movff   last_byte, stg_gy_l
-            ; Add byte to checksum accumulator.
             movf    last_byte, W, A
             addwf   parser_checksum, F, A
-            ; Advance parser state.
             movlw   P_GY_H
             movwf   parser_state, A
             bra     PS_Loop
 
 PS_GyH:
-            ; Save Gy high byte in staging register.
             movff   last_byte, stg_gy_h
-            ; Add byte to checksum accumulator.
             movf    last_byte, W, A
             addwf   parser_checksum, F, A
-            ; Advance parser state.
             movlw   P_GZ_L
             movwf   parser_state, A
             bra     PS_Loop
 
 PS_GzL:
-            ; Save Gz low byte in staging register.
             movff   last_byte, stg_gz_l
-            ; Add byte to checksum accumulator.
             movf    last_byte, W, A
             addwf   parser_checksum, F, A
-            ; Advance parser state.
             movlw   P_GZ_H
             movwf   parser_state, A
             bra     PS_Loop
 
 PS_GzH:
-            ; Save Gz high byte in staging register.
             movff   last_byte, stg_gz_h
-            ; Add byte to checksum accumulator.
             movf    last_byte, W, A
             addwf   parser_checksum, F, A
-            ; Advance parser state.
             movlw   P_BTN
             movwf   parser_state, A
             bra     PS_Loop
 
 PS_Btn:
-            ; Save button byte in staging register.
             movff   last_byte, stg_btn
-            ; Add byte to checksum accumulator.
             movf    last_byte, W, A
             addwf   parser_checksum, F, A
-            ; Advance parser state to checksum byte.
             movlw   P_CHK
             movwf   parser_state, A
             bra     PS_Loop
@@ -226,12 +205,11 @@ PS_Btn:
 ; State 8: compare received checksum with computed checksum
 ;-----------------------------------------------------------
 PS_Chk:
-            ; Compare received checksum byte to computed checksum.
             movf    last_byte, W, A
             xorwf   parser_checksum, W, A
             bnz     PS_BadChecksum
 
-            ; Checksum passed, so publish the staged frame as latest valid data.
+            ; Publish staged frame as latest valid data.
             movff   stg_gx_l, latest_gx_l
             movff   stg_gx_h, latest_gx_h
             movff   stg_gy_l, latest_gy_l
@@ -251,7 +229,6 @@ PS_Chk:
             incf    frame_ok_count_h, F, A
 
 PS_GoodDone:
-            ; Reset parser to SEARCH state for next frame.
             clrf    parser_state, A
             clrf    parser_checksum, A
             bra     PS_Loop
@@ -263,10 +240,8 @@ PS_BadChecksum:
             incf    frame_badck_count_h, F, A
 
 PS_BadDone:
-            ; Reset parser to SEARCH state for next frame.
             clrf    parser_state, A
             clrf    parser_checksum, A
             bra     PS_Loop
 
             end
-
