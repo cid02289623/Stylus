@@ -19,7 +19,7 @@ PROCESSOR 18F87K22
             GLOBAL  UART1_WriteByte
 
 ;-----------------------------------------------------------
-; Phase 6 constants
+; Phase 6A constants
 ;-----------------------------------------------------------
 BTN_BIT         equ 0
 
@@ -32,92 +32,82 @@ RES_UP          equ 0x55        ; 'U'
 RES_DOWN        equ 0x44        ; 'D'
 RES_UNK         equ 0x3F        ; '?'
 
+BIAS_SOF        equ 0xB1
+
 ;-----------------------------------------------------------
 ; Gesture decision threshold
-; Tune later from measured Dx/Dy pilot data.
+; Tune later from measured pilot data.
 ;-----------------------------------------------------------
 TDISP_H         equ 0x04
 TDISP_L         equ 0x00
 
 ;-----------------------------------------------------------
 ; Startup calibration constants
-; CAL_SAMPLES = 64 gives 64 fresh still samples, which is
-; about 1.28 s at 50 Hz.
+; 64 fresh still samples = about 1.28 s at 50 Hz.
 ;-----------------------------------------------------------
 CAL_ACTIVE      equ 0x01
 CAL_DONE        equ 0x00
 CAL_SAMPLES     equ 64
 
 ;-----------------------------------------------------------
-; Stillness gate during calibration
-; This threshold applies to the absolute sample-to-sample
-; change |current - previous| on each axis.
-; Tune if startup calibration is too strict or too loose.
+; Stillness gate for startup calibration.
+; We compare sample-to-sample change, not absolute value,
+; so a constant DC bias is still accepted as "still".
 ;-----------------------------------------------------------
 CAL_DDELTA_H    equ 0x01
 CAL_DDELTA_L    equ 0x00        ; 0x0100 = 256 counts
-
-;-----------------------------------------------------------
-; Debug telemetry frame start byte
-; Output format after each result:
-;   raw result byte
-;   0xF1, result, DxL, DxH, DyL, DyH, checksum
-; checksum = sum(result + DxL + DxH + DyL + DyH) mod 256
-;-----------------------------------------------------------
-TELEM_SOF       equ 0xF1
 
 ;-----------------------------------------------------------
 ; Gesture RAM
 ;-----------------------------------------------------------
             psect   udata_acs
 
-btn_now:                ds 1          ; Current button-down flag (0/1)
-prev_btn_down:          ds 1          ; Previous button-down flag (0/1)
-gesture_state:          ds 1          ; IDLE or CAPTURE
+btn_now:                ds 1
+prev_btn_down:          ds 1
+gesture_state:          ds 1
 
-acc_dx_l:               ds 1          ; Signed accumulated Dx low byte
-acc_dx_h:               ds 1          ; Signed accumulated Dx high byte
-acc_dy_l:               ds 1          ; Signed accumulated Dy low byte
-acc_dy_h:               ds 1          ; Signed accumulated Dy high byte
+acc_dx_l:               ds 1
+acc_dx_h:               ds 1
+acc_dy_l:               ds 1
+acc_dy_h:               ds 1
 
-mag_dx_l:               ds 1          ; |Dx| low byte
-mag_dx_h:               ds 1          ; |Dx| high byte
-mag_dy_l:               ds 1          ; |Dy| low byte
-mag_dy_h:               ds 1          ; |Dy| high byte
+mag_dx_l:               ds 1
+mag_dx_h:               ds 1
+mag_dy_l:               ds 1
+mag_dy_h:               ds 1
 
-gesture_result:         ds 1          ; Final result code
-cmp_result:             ds 1          ; General-purpose boolean result
+gesture_result:         ds 1
+cmp_result:             ds 1
 
-calib_active:           ds 1          ; 1 while startup calibration runs
-calib_count:            ds 1          ; Number of accepted still samples
-cal_prev_valid:         ds 1          ; 1 after first calibration sample saved
+calib_active:           ds 1
+calib_count:            ds 1
+cal_prev_valid:         ds 1
 
-bias_gx_l:              ds 1          ; Learned Gx bias low byte
-bias_gx_h:              ds 1          ; Learned Gx bias high byte
-bias_gy_l:              ds 1          ; Learned Gy bias low byte
-bias_gy_h:              ds 1          ; Learned Gy bias high byte
+bias_gx_l:              ds 1
+bias_gx_h:              ds 1
+bias_gy_l:              ds 1
+bias_gy_h:              ds 1
+bias_tx_cksum:          ds 1
 
-sumx_l:                 ds 1          ; 24-bit signed sum of Gx samples low
-sumx_h:                 ds 1          ; 24-bit signed sum of Gx samples mid
-sumx_u:                 ds 1          ; 24-bit signed sum of Gx samples high
+sumx_l:                 ds 1
+sumx_h:                 ds 1
+sumx_u:                 ds 1
 
-sumy_l:                 ds 1          ; 24-bit signed sum of Gy samples low
-sumy_h:                 ds 1          ; 24-bit signed sum of Gy samples mid
-sumy_u:                 ds 1          ; 24-bit signed sum of Gy samples high
+sumy_l:                 ds 1
+sumy_h:                 ds 1
+sumy_u:                 ds 1
 
-tmp_dx_l:               ds 1          ; Temporary 16-bit low byte
-tmp_dx_h:               ds 1          ; Temporary 16-bit high byte
-tmp_dy_l:               ds 1          ; Temporary 16-bit low byte
-tmp_dy_h:               ds 1          ; Temporary 16-bit high byte
+tmp_dx_l:               ds 1
+tmp_dx_h:               ds 1
+tmp_dy_l:               ds 1
+tmp_dy_h:               ds 1
 
-shift_count:            ds 1          ; Loop counter for /64 right shifts
+shift_count:            ds 1
 
-cal_prev_gx_l:          ds 1          ; Previous fresh calibration Gx low
-cal_prev_gx_h:          ds 1          ; Previous fresh calibration Gx high
-cal_prev_gy_l:          ds 1          ; Previous fresh calibration Gy low
-cal_prev_gy_h:          ds 1          ; Previous fresh calibration Gy high
-
-telem_cksum:            ds 1          ; Telemetry checksum accumulator
+cal_prev_gx_l:          ds 1
+cal_prev_gx_h:          ds 1
+cal_prev_gy_l:          ds 1
+cal_prev_gy_h:          ds 1
 
 ;-----------------------------------------------------------
 ; Code
@@ -126,34 +116,27 @@ telem_cksum:            ds 1          ; Telemetry checksum accumulator
 
 ;-----------------------------------------------------------
 ; GestureInit
-; - clears gesture state
-; - starts startup calibration
-; - lights RC5 during calibration
 ;-----------------------------------------------------------
 GestureInit:
-            ; Clear edge-detection and state variables.
             clrf    btn_now, A
             clrf    prev_btn_down, A
             clrf    gesture_state, A
 
-            ; Clear signed accumulators.
             clrf    acc_dx_l, A
             clrf    acc_dx_h, A
             clrf    acc_dy_l, A
             clrf    acc_dy_h, A
 
-            ; Clear magnitude work registers.
             clrf    mag_dx_l, A
             clrf    mag_dx_h, A
             clrf    mag_dy_l, A
             clrf    mag_dy_h, A
 
-            ; Default result is UNKNOWN.
             clrf    cmp_result, A
             movlw   RES_UNK
             movwf   gesture_result, A
 
-            ; Start calibration.
+            ; Start calibration mode.
             movlw   CAL_ACTIVE
             movwf   calib_active, A
             clrf    calib_count, A
@@ -164,6 +147,7 @@ GestureInit:
             clrf    bias_gx_h, A
             clrf    bias_gy_l, A
             clrf    bias_gy_h, A
+            clrf    bias_tx_cksum, A
 
             ; Clear running sums.
             clrf    sumx_l, A
@@ -179,15 +163,14 @@ GestureInit:
             clrf    tmp_dy_l, A
             clrf    tmp_dy_h, A
             clrf    shift_count, A
-            clrf    telem_cksum, A
 
-            ; Clear saved previous calibration sample.
+            ; Clear previous calibration sample.
             clrf    cal_prev_gx_l, A
             clrf    cal_prev_gx_h, A
             clrf    cal_prev_gy_l, A
             clrf    cal_prev_gy_h, A
 
-            ; Indicate startup calibration with RC5 on.
+            ; RC5 on during startup calibration.
             bsf     LATC, 5, A
             return
 
@@ -196,12 +179,12 @@ GestureInit:
 ; Called once per 20 ms processing slot.
 ; - toggles RC0 heartbeat
 ; - snapshots latest valid sample into proc_*
-; - while calibration is active, services calibration only
+; - while calibration is active, runs calibration only
 ; - after calibration, runs the gesture state machine
 ;-----------------------------------------------------------
 ProcessTickService:
             ; Toggle RC0 every 25 ticks.
-            ; 25 * 20 ms = 500 ms, so full blink cycle = 1 s.
+            ; 25 * 20 ms = 500 ms, full blink cycle = 1 s.
             incf    debug_tickdiv, F, A
             movlw   25
             cpfseq  debug_tickdiv, A
@@ -211,12 +194,12 @@ ProcessTickService:
             btg     LATC, 0, A
 
 PTS_NoToggle:
-            ; If no valid frame has ever been parsed, nothing to do.
+            ; No valid parsed sample yet -> nothing to process.
             movf    sample_valid, W, A
             bz      PTS_Done
 
             ; Snapshot latest valid sample into proc_*.
-            ; This decouples processing from UART arrival jitter.
+            ; This keeps processing tied to Timer1, not UART arrival time.
             movff   latest_gx_l, proc_gx_l
             movff   latest_gx_h, proc_gx_h
             movff   latest_gy_l, proc_gy_l
@@ -225,7 +208,7 @@ PTS_NoToggle:
             movff   latest_gz_h, proc_gz_h
             movff   latest_btn,  proc_btn
 
-            ; If startup calibration is still active, run that first.
+            ; While startup calibration is active, do not run gesture logic.
             movf    calib_active, W, A
             bz      PTS_RunGesture
 
@@ -234,7 +217,7 @@ PTS_NoToggle:
             bra     PTS_Done
 
 PTS_RunGesture:
-            ; This tick has now consumed the "fresh sample" condition.
+            ; This tick has consumed the "fresh sample" condition.
             clrf    new_sample, A
 
             ; Run the gesture engine.
@@ -246,12 +229,12 @@ PTS_Done:
 ;-----------------------------------------------------------
 ; CalibrationService
 ; - uses only fresh parsed samples
-; - applies a sample-to-sample stillness gate
+; - applies a stillness gate
 ; - accumulates 64 still samples for Gx and Gy
 ; - computes signed average bias = sum / 64
 ;-----------------------------------------------------------
 CalibrationService:
-            ; Ignore reused samples. Only fresh parser commits count.
+            ; Ignore reused old samples.
             movf    new_sample, W, A
             bz      CAL_Done
 
@@ -282,12 +265,12 @@ CalibrationService:
             ; Count this accepted still sample.
             incf    calib_count, F, A
 
-            ; If not yet at CAL_SAMPLES, continue calibrating.
+            ; When CAL_SAMPLES accepted still samples have been seen,
+            ; compute the average biases.
             movlw   CAL_SAMPLES
             cpfseq  calib_count, A
             bra     CAL_Done
 
-            ; Reached target count -> compute average biases.
             call    FinishCalibration
 
 CAL_Done:
@@ -295,15 +278,14 @@ CAL_Done:
 
 ;-----------------------------------------------------------
 ; CalibrationCheckStill
-; Returns W = 1 if the current fresh sample is considered still.
+; Returns W = 1 if the current fresh sample is still enough.
 ; Strategy:
-; - first fresh sample seeds the previous-sample register and is not used
-; - afterwards, if both |Gx(n)-Gx(n-1)| and |Gy(n)-Gy(n-1)| are
-;   <= CAL_DDELTA, the sample is accepted as still
-; - the previous sample is always updated at the end
+; - first fresh sample seeds the previous-sample registers
+; - afterwards, if both |Gx(n)-Gx(n-1)| and |Gy(n)-Gy(n-1)|
+;   are <= CAL_DDELTA, accept the sample
 ;-----------------------------------------------------------
 CalibrationCheckStill:
-            ; Default return = 0 (not accepted yet).
+            ; Default return = 0
             clrf    cmp_result, A
 
             ; If no previous fresh sample exists, seed it and return 0.
@@ -325,7 +307,7 @@ CCS_HavePrev:
             ; tmp_dx = |tmp_dx|
             call    MakeAbsTmpDx
 
-            ; If delta-x is too large, reject this sample.
+            ; If delta-x is too large, reject.
             call    TmpDxWithinCalDelta
             bz      CCS_UpdatePrev
 
@@ -340,25 +322,22 @@ CCS_HavePrev:
             ; tmp_dy = |tmp_dy|
             call    MakeAbsTmpDy
 
-            ; If delta-y is too large, reject this sample.
+            ; If delta-y is too large, reject.
             call    TmpDyWithinCalDelta
             bz      CCS_UpdatePrev
 
-            ; Both deltas are inside threshold -> accept sample.
+            ; Both deltas are within threshold -> accept sample.
             movlw   0x01
             movwf   cmp_result, A
 
 CCS_UpdatePrev:
-            ; Always update the previous-sample register.
             call    CalibrationStorePrev
-
-            ; Return W = 1 if still, else 0.
             movf    cmp_result, W, A
             return
 
 ;-----------------------------------------------------------
 ; CalibrationStorePrev
-; Saves current proc_gx / proc_gy as the previous calibration sample.
+; Saves current proc_gx / proc_gy as previous calibration sample.
 ;-----------------------------------------------------------
 CalibrationStorePrev:
             movff   proc_gx_l, cal_prev_gx_l
@@ -373,7 +352,7 @@ CalibrationStorePrev:
 ; FinishCalibration
 ; - divides signed 24-bit sums by 64 using arithmetic right shifts
 ; - stores low 16 bits as bias_gx and bias_gy
-; - ends calibration and clears result LEDs RC1..RC5
+; - exits calibration mode
 ;-----------------------------------------------------------
 FinishCalibration:
             ; Compute bias_gx = sumx / 64 using 6 arithmetic right shifts.
@@ -381,9 +360,9 @@ FinishCalibration:
             movwf   shift_count, A
 
 FC_ShiftX:
-            bcf     STATUS, 0, A      ; Clear C before injecting sign bit
-            btfsc   sumx_u, 7, A      ; If sign bit = 1,
-            bsf     STATUS, 0, A      ; preload C = 1 for arithmetic shift
+            bcf     STATUS, 0, A
+            btfsc   sumx_u, 7, A
+            bsf     STATUS, 0, A
             rrcf    sumx_u, F, A
             rrcf    sumx_h, F, A
             rrcf    sumx_l, F, A
@@ -410,14 +389,57 @@ FC_ShiftY:
             movff   sumy_l, bias_gy_l
             movff   sumy_h, bias_gy_h
 
-            ; Calibration is complete.
+            ; Calibration complete.
             clrf    calib_active, A
             clrf    calib_count, A
             clrf    cal_prev_valid, A
 
-            ; Clear result LEDs RC1..RC5, preserve heartbeat RC0 and UART pins.
+            ; Print learned bias once over UART.
+            call    SendBiasDebugFrame
+
+            ; Clear RC1..RC5, preserve heartbeat on RC0 and UART pins.
             movlw   11000001B
             andwf   LATC, F, A
+            return
+
+;-----------------------------------------------------------
+; SendBiasDebugFrame
+; Sends one frame after calibration completes:
+;   0xB1, gx_l, gx_h, gy_l, gy_h, checksum
+; checksum = sum(gx_l + gx_h + gy_l + gy_h) mod 256
+;-----------------------------------------------------------
+SendBiasDebugFrame:
+            ; Send start byte.
+            movlw   BIAS_SOF
+            call    UART1_WriteByte
+
+            ; Clear checksum accumulator.
+            clrf    bias_tx_cksum, A
+
+            ; Send bias_gx low.
+            movf    bias_gx_l, W, A
+            addwf   bias_tx_cksum, F, A
+            call    UART1_WriteByte
+
+            ; Send bias_gx high.
+            movf    bias_gx_h, W, A
+            addwf   bias_tx_cksum, F, A
+            call    UART1_WriteByte
+
+            ; Send bias_gy low.
+            movf    bias_gy_l, W, A
+            addwf   bias_tx_cksum, F, A
+            call    UART1_WriteByte
+
+            ; Send bias_gy high.
+            movf    bias_gy_h, W, A
+            addwf   bias_tx_cksum, F, A
+            call    UART1_WriteByte
+
+            ; Send checksum.
+            movf    bias_tx_cksum, W, A
+            call    UART1_WriteByte
+
             return
 
 ;-----------------------------------------------------------
@@ -427,7 +449,7 @@ FC_ShiftY:
 ; - classifies on release
 ;-----------------------------------------------------------
 GestureService:
-            ; btn_now = 1 if proc_btn bit is high, else 0.
+            ; btn_now = 1 if proc_btn bit is high, else 0
             clrf    btn_now, A
             btfsc   proc_btn, BTN_BIT, A
             incf    btn_now, F, A
@@ -438,19 +460,19 @@ GestureService:
             bra     GS_Capture
 
 GS_Idle:
-            ; Wait for rising edge: prev = 0, now = 1.
+            ; Wait for rising edge: prev = 0, now = 1
             movf    btn_now, W, A
             bz      GS_UpdatePrev
 
             movf    prev_btn_down, W, A
             bnz     GS_UpdatePrev
 
-            ; Rising edge -> start a new capture.
+            ; Rising edge -> start capture
             call    GestureStartCapture
             bra     GS_UpdatePrev
 
 GS_Capture:
-            ; While the button is held, accumulate every 20 ms tick.
+            ; While pressed, accumulate every 20 ms tick.
             movf    btn_now, W, A
             bz      GS_Released
 
@@ -474,22 +496,20 @@ GS_UpdatePrev:
 ;-----------------------------------------------------------
 ; GestureStartCapture
 ; - clears accumulators
-; - clears result LEDs
+; - clears LEDs
 ; - enters capture state
 ; - accumulates the current pressed sample immediately
 ;-----------------------------------------------------------
 GestureStartCapture:
-            ; Clear signed motion accumulators.
             clrf    acc_dx_l, A
             clrf    acc_dx_h, A
             clrf    acc_dy_l, A
             clrf    acc_dy_h, A
 
-            ; Clear result LEDs RC1..RC5, preserve RC0/RC6/RC7.
+            ; Clear RC1..RC5 only.
             movlw   11000001B
             andwf   LATC, F, A
 
-            ; Enter capture state.
             movlw   G_CAPTURE
             movwf   gesture_state, A
 
@@ -541,7 +561,6 @@ GestureAccumulate:
 ;   else dominant axis + sign -> L/R/U/D
 ;-----------------------------------------------------------
 GestureClassifyAndReport:
-            ; Compute |Dx| and |Dy|.
             call    MakeAbsDx
             call    MakeAbsDy
 
@@ -570,27 +589,24 @@ GCR_XLoNotGreater:
             bra     GCR_DomY
 
 GCR_DomX:
-            ; Require |Dx| to exceed threshold.
             call    MagDxAboveThreshold
             bz      GCR_Unknown
 
-            ; Negative Dx = LEFT, positive Dx = RIGHT.
+            ; Negative Dx = LEFT, positive Dx = RIGHT
             btfsc   acc_dx_h, 7, A
             bra     GCR_Left
             bra     GCR_Right
 
 GCR_DomY:
-            ; Require |Dy| to exceed threshold.
             call    MagDyAboveThreshold
             bz      GCR_Unknown
 
-            ; Negative Dy = DOWN, positive Dy = UP.
+            ; Negative Dy = DOWN, positive Dy = UP
             btfsc   acc_dy_h, 7, A
             bra     GCR_Down
             bra     GCR_Up
 
 GCR_Tie:
-            ; Equal magnitudes are treated as UNKNOWN.
             bra     GCR_Unknown
 
 GCR_Left:
@@ -618,15 +634,8 @@ GCR_Unknown:
             movwf   gesture_result, A
 
 GCR_Report:
-            ; Show result locally on LEDs.
             call    ShowGestureOnLEDs
-
-            ; Send the original one-byte result for normal logging.
             call    SendGestureResultByte
-
-            ; Also send a structured telemetry frame carrying Dx and Dy
-            ; to help threshold tuning in Phase 6 pilot tests.
-            call    SendGestureDebugFrame
             return
 
 ;-----------------------------------------------------------
@@ -637,11 +646,9 @@ MakeAbsDx:
             movff   acc_dx_l, mag_dx_l
             movff   acc_dx_h, mag_dx_h
 
-            ; If sign bit is clear, value is already non-negative.
             btfss   mag_dx_h, 7, A
             return
 
-            ; Two's-complement negate to form absolute value.
             comf    mag_dx_l, F, A
             comf    mag_dx_h, F, A
             incf    mag_dx_l, F, A
@@ -658,11 +665,9 @@ MakeAbsDy:
             movff   acc_dy_l, mag_dy_l
             movff   acc_dy_h, mag_dy_h
 
-            ; If sign bit is clear, value is already non-negative.
             btfss   mag_dy_h, 7, A
             return
 
-            ; Two's-complement negate to form absolute value.
             comf    mag_dy_l, F, A
             comf    mag_dy_h, F, A
             incf    mag_dy_l, F, A
@@ -710,7 +715,6 @@ MATDY_Done:
 MagDxAboveThreshold:
             clrf    cmp_result, A
 
-            ; If high byte > threshold high, definitely above.
             movlw   TDISP_H
             cpfsgt  mag_dx_h, A
             bra     MDTX_HNotGreater
@@ -720,12 +724,10 @@ MagDxAboveThreshold:
             bra     MDTX_Done
 
 MDTX_HNotGreater:
-            ; If high byte != threshold high and not greater, then below.
             movlw   TDISP_H
             cpfseq  mag_dx_h, A
             bra     MDTX_Done
 
-            ; High bytes are equal, so compare low byte.
             movlw   TDISP_L
             cpfsgt  mag_dx_l, A
             bra     MDTX_Done
@@ -744,7 +746,6 @@ MDTX_Done:
 MagDyAboveThreshold:
             clrf    cmp_result, A
 
-            ; If high byte > threshold high, definitely above.
             movlw   TDISP_H
             cpfsgt  mag_dy_h, A
             bra     MDTY_HNotGreater
@@ -754,12 +755,10 @@ MagDyAboveThreshold:
             bra     MDTY_Done
 
 MDTY_HNotGreater:
-            ; If high byte != threshold high and not greater, then below.
             movlw   TDISP_H
             cpfseq  mag_dy_h, A
             bra     MDTY_Done
 
-            ; High bytes are equal, so compare low byte.
             movlw   TDISP_L
             cpfsgt  mag_dy_l, A
             bra     MDTY_Done
@@ -778,14 +777,12 @@ MDTY_Done:
 TmpDxWithinCalDelta:
             clrf    cmp_result, A
 
-            ; If high byte > threshold high, fail.
             movlw   CAL_DDELTA_H
             cpfsgt  tmp_dx_h, A
             bra     TDX_HNotGreater
             bra     TDX_Done
 
 TDX_HNotGreater:
-            ; If high byte < threshold high, pass immediately.
             movlw   CAL_DDELTA_H
             cpfslt  tmp_dx_h, A
             bra     TDX_CheckLow
@@ -795,7 +792,6 @@ TDX_HNotGreater:
             bra     TDX_Done
 
 TDX_CheckLow:
-            ; High bytes equal, so low byte must be <= threshold low.
             movlw   CAL_DDELTA_L
             cpfsgt  tmp_dx_l, A
             bra     TDX_LowOK
@@ -816,14 +812,12 @@ TDX_Done:
 TmpDyWithinCalDelta:
             clrf    cmp_result, A
 
-            ; If high byte > threshold high, fail.
             movlw   CAL_DDELTA_H
             cpfsgt  tmp_dy_h, A
             bra     TDY_HNotGreater
             bra     TDY_Done
 
 TDY_HNotGreater:
-            ; If high byte < threshold high, pass immediately.
             movlw   CAL_DDELTA_H
             cpfslt  tmp_dy_h, A
             bra     TDY_CheckLow
@@ -833,7 +827,6 @@ TDY_HNotGreater:
             bra     TDY_Done
 
 TDY_CheckLow:
-            ; High bytes equal, so low byte must be <= threshold low.
             movlw   CAL_DDELTA_L
             cpfsgt  tmp_dy_l, A
             bra     TDY_LowOK
@@ -861,7 +854,6 @@ ShowGestureOnLEDs:
             movlw   11000001B
             andwf   LATC, F, A
 
-            ; LEFT
             movf    gesture_result, W, A
             xorlw   RES_LEFT
             bnz     SG_NotLeft
@@ -869,7 +861,6 @@ ShowGestureOnLEDs:
             return
 
 SG_NotLeft:
-            ; RIGHT
             movf    gesture_result, W, A
             xorlw   RES_RIGHT
             bnz     SG_NotRight
@@ -877,7 +868,6 @@ SG_NotLeft:
             return
 
 SG_NotRight:
-            ; UP
             movf    gesture_result, W, A
             xorlw   RES_UP
             bnz     SG_NotUp
@@ -885,7 +875,6 @@ SG_NotRight:
             return
 
 SG_NotUp:
-            ; DOWN
             movf    gesture_result, W, A
             xorlw   RES_DOWN
             bnz     SG_NotDown
@@ -893,60 +882,16 @@ SG_NotUp:
             return
 
 SG_NotDown:
-            ; Otherwise show UNKNOWN on RC5.
             bsf     LATC, 5, A
             return
 
 ;-----------------------------------------------------------
 ; SendGestureResultByte
-; Sends one UART byte for the normal logging path.
+; Sends one UART byte for logging.
+; Person B's tester expects only this classifier byte.
 ;-----------------------------------------------------------
 SendGestureResultByte:
             movf    gesture_result, W, A
-            call    UART1_WriteByte
-            return
-
-;-----------------------------------------------------------
-; SendGestureDebugFrame
-; Sends:
-;   0xF1, result, DxL, DxH, DyL, DyH, checksum
-; where checksum = sum(result + DxL + DxH + DyL + DyH) mod 256
-;-----------------------------------------------------------
-SendGestureDebugFrame:
-            ; Send telemetry start byte.
-            movlw   TELEM_SOF
-            call    UART1_WriteByte
-
-            ; Clear checksum accumulator.
-            clrf    telem_cksum, A
-
-            ; Send result and accumulate checksum.
-            movf    gesture_result, W, A
-            addwf   telem_cksum, F, A
-            call    UART1_WriteByte
-
-            ; Send final Dx low byte.
-            movf    acc_dx_l, W, A
-            addwf   telem_cksum, F, A
-            call    UART1_WriteByte
-
-            ; Send final Dx high byte.
-            movf    acc_dx_h, W, A
-            addwf   telem_cksum, F, A
-            call    UART1_WriteByte
-
-            ; Send final Dy low byte.
-            movf    acc_dy_l, W, A
-            addwf   telem_cksum, F, A
-            call    UART1_WriteByte
-
-            ; Send final Dy high byte.
-            movf    acc_dy_h, W, A
-            addwf   telem_cksum, F, A
-            call    UART1_WriteByte
-
-            ; Send checksum byte.
-            movf    telem_cksum, W, A
             call    UART1_WriteByte
             return
 
