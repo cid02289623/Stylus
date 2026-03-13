@@ -1,9 +1,9 @@
             PROCESSOR 18F87K22
             #include <xc.inc>
 
-            EXTERN  ParserService
-            EXTERN  GestureInit
-            EXTERN  ProcessTickService
+            GLOBAL  ParserService
+            GLOBAL  GestureInit
+            GLOBAL  ProcessTickService
 
             GLOBAL  UART1_WriteByte
 
