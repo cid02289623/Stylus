@@ -4,19 +4,20 @@
             GLOBAL  GestureInit
             GLOBAL  ProcessTickService
 
-            EXTERN  sample_valid, new_sample
-            EXTERN  latest_gx_l, latest_gx_h
-            EXTERN  latest_gy_l, latest_gy_h
-            EXTERN  latest_gz_l, latest_gz_h
-            EXTERN  latest_btn
+            GLOBAL  sample_valid, new_sample
+            GLOBAL  latest_gx_l, latest_gx_h
+            GLOBAL  latest_gy_l, latest_gy_h
+            GLOBAL  latest_gz_l, latest_gz_h
+            GLOBAL  latest_btn
 
-            EXTERN  proc_gx_l, proc_gx_h
-            EXTERN  proc_gy_l, proc_gy_h
-            EXTERN  proc_gz_l, proc_gz_h
-            EXTERN  proc_btn
+            GLOBAL  proc_gx_l, proc_gx_h
+            GLOBAL  proc_gy_l, proc_gy_h
+            GLOBAL  proc_gz_l, proc_gz_h
+            GLOBAL  proc_btn
 
-            EXTERN  debug_tickdiv
-            EXTERN  UART1_WriteByte
+            GLOBAL  debug_tickdiv
+            GLOBAL  UART1_WriteByte
+
 
 ;-----------------------------------------------------------
 ; Phase 5 constants
