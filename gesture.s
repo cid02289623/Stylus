@@ -19,7 +19,7 @@ PROCESSOR 18F87K22
             GLOBAL  UART1_WriteByte
 
 ;-----------------------------------------------------------
-; Phase 6A constants
+; Phase 6 constants
 ;-----------------------------------------------------------
 BTN_BIT         equ 0
 
@@ -32,18 +32,30 @@ RES_UP          equ 0x55        ; 'U'
 RES_DOWN        equ 0x44        ; 'D'
 RES_UNK         equ 0x3F        ; '?'
 
+;-----------------------------------------------------------
+; UART pilot-report frames for Phase 6.
+; BIAS_SOF:
+;   0xB1, bias_gx_l, bias_gx_h, bias_gy_l, bias_gy_h, checksum
+;
+; CAPTURE_SOF:
+;   0xD1, acc_dx_l, acc_dx_h, acc_dy_l, acc_dy_h, checksum
+;
+; checksum = sum(bytes 1..4) mod 256
+;-----------------------------------------------------------
 BIAS_SOF        equ 0xB1
+CAPTURE_SOF     equ 0xD1
 
 ;-----------------------------------------------------------
-; Gesture decision threshold
-; Tune later from measured pilot data.
+; Gesture decision threshold.
+; In Phase 6 this is not the main focus.
+; It will be tuned later from the pilot data that this build emits.
 ;-----------------------------------------------------------
 TDISP_H         equ 0x04
 TDISP_L         equ 0x00
 
 ;-----------------------------------------------------------
 ; Startup calibration constants
-; 64 fresh still samples = about 1.28 s at 50 Hz.
+; 64 accepted still samples = about 1.28 s at 50 Hz.
 ;-----------------------------------------------------------
 CAL_ACTIVE      equ 0x01
 CAL_DONE        equ 0x00
@@ -87,7 +99,8 @@ bias_gx_l:              ds 1
 bias_gx_h:              ds 1
 bias_gy_l:              ds 1
 bias_gy_h:              ds 1
-bias_tx_cksum:          ds 1
+
+tx_cksum:               ds 1
 
 sumx_l:                 ds 1
 sumx_h:                 ds 1
@@ -147,7 +160,9 @@ GestureInit:
             clrf    bias_gx_h, A
             clrf    bias_gy_l, A
             clrf    bias_gy_h, A
-            clrf    bias_tx_cksum, A
+
+            ; Clear UART checksum temp.
+            clrf    tx_cksum, A
 
             ; Clear running sums.
             clrf    sumx_l, A
@@ -353,6 +368,7 @@ CalibrationStorePrev:
 ; - divides signed 24-bit sums by 64 using arithmetic right shifts
 ; - stores low 16 bits as bias_gx and bias_gy
 ; - exits calibration mode
+; - emits one UART bias frame for pilot logging
 ;-----------------------------------------------------------
 FinishCalibration:
             ; Compute bias_gx = sumx / 64 using 6 arithmetic right shifts.
@@ -394,8 +410,8 @@ FC_ShiftY:
             clrf    calib_count, A
             clrf    cal_prev_valid, A
 
-            ; Print learned bias once over UART.
-            call    SendBiasDebugFrame
+            ; Emit learned bias once for pilot logging.
+            call    SendBiasPilotFrame
 
             ; Clear RC1..RC5, preserve heartbeat on RC0 and UART pins.
             movlw   11000001B
@@ -403,43 +419,71 @@ FC_ShiftY:
             return
 
 ;-----------------------------------------------------------
-; SendBiasDebugFrame
-; Sends one frame after calibration completes:
-;   0xB1, gx_l, gx_h, gy_l, gy_h, checksum
-; checksum = sum(gx_l + gx_h + gy_l + gy_h) mod 256
+; SendBiasPilotFrame
+; Sends:
+;   0xB1, bias_gx_l, bias_gx_h, bias_gy_l, bias_gy_h, checksum
+; checksum = sum(bytes 1..4) mod 256
 ;-----------------------------------------------------------
-SendBiasDebugFrame:
-            ; Send start byte.
+SendBiasPilotFrame:
             movlw   BIAS_SOF
             call    UART1_WriteByte
 
-            ; Clear checksum accumulator.
-            clrf    bias_tx_cksum, A
+            clrf    tx_cksum, A
 
-            ; Send bias_gx low.
             movf    bias_gx_l, W, A
-            addwf   bias_tx_cksum, F, A
+            addwf   tx_cksum, F, A
             call    UART1_WriteByte
 
-            ; Send bias_gx high.
             movf    bias_gx_h, W, A
-            addwf   bias_tx_cksum, F, A
+            addwf   tx_cksum, F, A
             call    UART1_WriteByte
 
-            ; Send bias_gy low.
             movf    bias_gy_l, W, A
-            addwf   bias_tx_cksum, F, A
+            addwf   tx_cksum, F, A
             call    UART1_WriteByte
 
-            ; Send bias_gy high.
             movf    bias_gy_h, W, A
-            addwf   bias_tx_cksum, F, A
+            addwf   tx_cksum, F, A
             call    UART1_WriteByte
 
-            ; Send checksum.
-            movf    bias_tx_cksum, W, A
+            movf    tx_cksum, W, A
+            call    UART1_WriteByte
+            return
+
+;-----------------------------------------------------------
+; SendCapturePilotFrame
+; Sends one frame when a capture finishes:
+;   0xD1, acc_dx_l, acc_dx_h, acc_dy_l, acc_dy_h, checksum
+; checksum = sum(bytes 1..4) mod 256
+;
+; This is the key Phase 6 measurement support:
+; it exposes the final signed accumulated Dx and Dy values
+; so Tdisp can be derived from pilot no-motion trials.
+;-----------------------------------------------------------
+SendCapturePilotFrame:
+            movlw   CAPTURE_SOF
             call    UART1_WriteByte
 
+            clrf    tx_cksum, A
+
+            movf    acc_dx_l, W, A
+            addwf   tx_cksum, F, A
+            call    UART1_WriteByte
+
+            movf    acc_dx_h, W, A
+            addwf   tx_cksum, F, A
+            call    UART1_WriteByte
+
+            movf    acc_dy_l, W, A
+            addwf   tx_cksum, F, A
+            call    UART1_WriteByte
+
+            movf    acc_dy_h, W, A
+            addwf   tx_cksum, F, A
+            call    UART1_WriteByte
+
+            movf    tx_cksum, W, A
+            call    UART1_WriteByte
             return
 
 ;-----------------------------------------------------------
@@ -480,7 +524,7 @@ GS_Capture:
             bra     GS_UpdatePrev
 
 GS_Released:
-            ; Falling edge -> classify once.
+            ; Falling edge -> emit pilot data and classify once.
             movf    prev_btn_down, W, A
             bz      GS_UpdatePrev
 
@@ -554,13 +598,17 @@ GestureAccumulate:
 
 ;-----------------------------------------------------------
 ; GestureClassifyAndReport
-; Decision:
-;   Ax = |Dx|
-;   Ay = |Dy|
-;   if dominant magnitude <= threshold -> UNKNOWN
-;   else dominant axis + sign -> L/R/U/D
+; In Phase 6, the most important output is the raw accumulated
+; capture report frame, because that is what supports threshold
+; derivation from data.
+;
+; The existing classifier is retained after the pilot frame so the
+; rest of the pipeline still behaves normally enough for later work.
 ;-----------------------------------------------------------
 GestureClassifyAndReport:
+            ; First emit the raw end-of-capture measurement.
+            call    SendCapturePilotFrame
+
             call    MakeAbsDx
             call    MakeAbsDy
 
@@ -887,8 +935,9 @@ SG_NotDown:
 
 ;-----------------------------------------------------------
 ; SendGestureResultByte
-; Sends one UART byte for logging.
-; Person B's tester expects only this classifier byte.
+; Sends one normal classifier byte.
+; In Phase 6 this is optional background behaviour; the pilot test
+; focuses on the calibration frame and the capture-report frame.
 ;-----------------------------------------------------------
 SendGestureResultByte:
             movf    gesture_result, W, A
