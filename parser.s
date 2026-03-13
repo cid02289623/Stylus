@@ -3,21 +3,21 @@
 
             GLOBAL  ParserService
 
-            EXTERN  rx_head, rx_tail, rx_buf, last_byte
-            EXTERN  parser_state, parser_checksum
-            EXTERN  stg_gx_l, stg_gx_h
-            EXTERN  stg_gy_l, stg_gy_h
-            EXTERN  stg_gz_l, stg_gz_h
-            EXTERN  stg_btn
+            GLOBAL  rx_head, rx_tail, rx_buf, last_byte
+            GLOBAL  parser_state, parser_checksum
+            GLOBAL  stg_gx_l, stg_gx_h
+            GLOBAL  stg_gy_l, stg_gy_h
+            GLOBAL  stg_gz_l, stg_gz_h
+            GLOBAL  stg_btn
 
-            EXTERN  latest_gx_l, latest_gx_h
-            EXTERN  latest_gy_l, latest_gy_h
-            EXTERN  latest_gz_l, latest_gz_h
-            EXTERN  latest_btn
+            GLOBAL  latest_gx_l, latest_gx_h
+            GLOBAL  latest_gy_l, latest_gy_h
+            GLOBAL  latest_gz_l, latest_gz_h
+            GLOBAL  latest_btn
 
-            EXTERN  sample_valid, new_sample
-            EXTERN  frame_ok_count_l, frame_ok_count_h
-            EXTERN  frame_badck_count_l, frame_badck_count_h
+            GLOBAL  sample_valid, new_sample
+            GLOBAL  frame_ok_count_l, frame_ok_count_h
+            GLOBAL  frame_badck_count_l, frame_badck_count_h
 
 ;===========================================================
 ; parser.s
