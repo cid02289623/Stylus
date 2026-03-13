@@ -1,0 +1,104 @@
+Phase 5 Reproducibility Commands
+================================
+
+Environment
+-----------
+These commands assume:
+- the PIC is connected on COM5
+- baud rate is 115200
+- the host script file is named gesture_tester.py
+- the PIC firmware returns one byte per completed gesture
+- button pressed is encoded as 0x01 in byte 7
+- result bytes are:
+    UNKNOWN = 0x3F
+    LEFT    = 0x4C
+    RIGHT   = 0x52
+    UP      = 0x55
+    DOWN    = 0x44
+
+Install dependency once:
+    py -m pip install pyserial
+
+
+1) Clean single-class validation tests
+--------------------------------------
+
+RIGHT:
+py gesture_tester.py --port COM5 --baud 115200 --gesture right --trials-per-class 3 --button-mask 0x01 --code-unknown 0x3F --code-left 0x4C --code-right 0x52 --code-up 0x55 --code-down 0x44
+
+LEFT:
+py gesture_tester.py --port COM5 --baud 115200 --gesture left --trials-per-class 3 --button-mask 0x01 --code-unknown 0x3F --code-left 0x4C --code-right 0x52 --code-up 0x55 --code-down 0x44
+
+UP:
+py gesture_tester.py --port COM5 --baud 115200 --gesture up --trials-per-class 3 --button-mask 0x01 --code-unknown 0x3F --code-left 0x4C --code-right 0x52 --code-up 0x55 --code-down 0x44
+
+DOWN:
+py gesture_tester.py --port COM5 --baud 115200 --gesture down --trials-per-class 3 --button-mask 0x01 --code-unknown 0x3F --code-left 0x4C --code-right 0x52 --code-up 0x55 --code-down 0x44
+
+UNKNOWN:
+py gesture_tester.py --port COM5 --baud 115200 --gesture unknown --trials-per-class 5 --unknown-amp 20 --button-mask 0x01 --code-unknown 0x3F --code-left 0x4C --code-right 0x52 --code-up 0x55 --code-down 0x44
+
+
+2) Clean mixed-class validation
+-------------------------------
+Nominal synthetic end-to-end validation:
+py gesture_tester.py --port COM5 --baud 115200 --gesture all --trials-per-class 3 --shuffle --button-mask 0x01 --code-unknown 0x3F --code-left 0x4C --code-right 0x52 --code-up 0x55 --code-down 0x44 --csv phase5_clean.csv
+
+
+3) Stronger-motion / stress tests
+---------------------------------
+These are not the main validation tests. They are stress tests used to probe the operating limit of the current 16-bit accumulators.
+
+Combined stronger amplitude + longer capture window:
+py gesture_tester.py --port COM5 --baud 115200 --gesture all --trials-per-class 3 --shuffle --amp 2000 --capture-frames 12 --button-mask 0x01 --code-unknown 0x3F --code-left 0x4C --code-right 0x52 --code-up 0x55 --code-down 0x44
+
+Amplitude increased only:
+py gesture_tester.py --port COM5 --baud 115200 --gesture all --trials-per-class 3 --shuffle --amp 1600 --capture-frames 8 --button-mask 0x01 --code-unknown 0x3F --code-left 0x4C --code-right 0x52 --code-up 0x55 --code-down 0x44
+
+Capture length increased only:
+py gesture_tester.py --port COM5 --baud 115200 --gesture all --trials-per-class 3 --shuffle --amp 1200 --capture-frames 10 --button-mask 0x01 --code-unknown 0x3F --code-left 0x4C --code-right 0x52 --code-up 0x55 --code-down 0x44
+
+
+4) Timing robustness tests
+--------------------------
+Jittered inter-frame timing:
+py gesture_tester.py --port COM5 --baud 115200 --gesture all --trials-per-class 5 --shuffle --mode jitter --jitter-ms 6 --button-mask 0x01 --code-unknown 0x3F --code-left 0x4C --code-right 0x52 --code-up 0x55 --code-down 0x44 --csv phase5_jitter.csv
+
+Dropout / stretched frame interval timing:
+py gesture_tester.py --port COM5 --baud 115200 --gesture all --trials-per-class 5 --shuffle --mode dropout --dropout-every 8 --dropout-extra-ms 40 --button-mask 0x01 --code-unknown 0x3F --code-left 0x4C --code-right 0x52 --code-up 0x55 --code-down 0x44 --csv phase5_dropout.csv
+
+
+Interpretation Guide
+====================
+
+Nominal operating tests:
+- The clean single-class tests
+- The clean mixed-class test
+- The jitter test
+- The dropout test
+
+These are the main validation results for the current firmware.
+
+Stress tests:
+- The stronger-motion combined test
+- The amplitude-only stronger test
+- The capture-length-only stronger test
+
+These are used to probe the dynamic range limit of the current 16-bit signed accumulators.
+
+Observed conclusion from our runs:
+- All nominal tests passed.
+- Jitter and dropout tests also passed.
+- The combined strong-amplitude + long-capture stress test failed systematically.
+- Stronger amplitude alone passed.
+- Longer capture duration alone passed.
+
+Engineering conclusion:
+- The limiting factor is not amplitude alone and not capture length alone.
+- The limiting factor is the total accumulated signed displacement.
+- When amplitude and duration are both increased together, the current 16-bit accumulators can overflow and invert gesture sign.
+
+Files produced by the main reproducibility runs:
+- phase5_clean.csv
+- phase5_jitter.csv
+- phase5_dropout.csv
