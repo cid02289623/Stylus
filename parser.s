@@ -229,19 +229,17 @@ PS_Chk:
             incf    frame_ok_count_h, F, A
 
 PS_GoodDone:
-            ; Reset parser and continue scanning.
             clrf    parser_state, A
             clrf    parser_checksum, A
             bra     PS_Loop
 
 PS_BadChecksum:
-            ; Count bad-checksum frame.
+            ; Count bad checksum frame.
             incf    frame_badck_count_l, F, A
             bnz     PS_BadDone
             incf    frame_badck_count_h, F, A
 
 PS_BadDone:
-            ; Reset parser and continue scanning.
             clrf    parser_state, A
             clrf    parser_checksum, A
             bra     PS_Loop
