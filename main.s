@@ -41,11 +41,10 @@ PROCESSOR 18F87K22
 ; - ProcessTickService in gesture.s snapshots the latest sample,
 ;   runs startup calibration first, then runs the gesture engine
 ;===========================================================
-
 ;-----------------------------------------------------------
-; Access RAM
+; Access RAM split into several smaller COMRAM psects
 ;-----------------------------------------------------------
-            psect   udata_acs
+            psect   main_acs0,class=COMRAM,space=1,noexec
 
 isr_wreg:               ds 1
 isr_status:             ds 1
@@ -69,15 +68,14 @@ rx_ovf_count:           ds 1
 
 ;-----------------------------------------------------------
 ; Ring buffer moved out of access RAM.
-; It is always accessed indirectly through FSR0.
 ;-----------------------------------------------------------
             psect   udata
 rx_buf:                 ds 32
 
 ;-----------------------------------------------------------
-; Back to access RAM for direct-access variables
+; More access RAM, separate psect
 ;-----------------------------------------------------------
-            psect   udata_acs
+            psect   main_acs1,class=COMRAM,space=1,noexec
 
 parser_state:           ds 1
 parser_checksum:        ds 1
@@ -97,6 +95,11 @@ latest_gy_h:            ds 1
 latest_gz_l:            ds 1
 latest_gz_h:            ds 1
 latest_btn:             ds 1
+
+;-----------------------------------------------------------
+; More access RAM, separate psect
+;-----------------------------------------------------------
+            psect   main_acs2,class=COMRAM,space=1,noexec
 
 sample_valid:           ds 1
 new_sample:             ds 1
@@ -477,7 +480,7 @@ ISR_CheckTMR1:
             incf    tick_count_h, F, A
 
 ISR_Exit:
-            ; Restore saved context in reverse order.
+            ; Restore context.
             movff   isr_fsr0h, FSR0H
             movff   isr_fsr0l, FSR0L
             movff   isr_bsr,   BSR
@@ -485,4 +488,4 @@ ISR_Exit:
             movff   isr_wreg,  WREG
             retfie
 
-            end
+            end     rst
