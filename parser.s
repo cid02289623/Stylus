@@ -3,6 +3,8 @@ PROCESSOR 18F87K22
 
             GLOBAL  ParserService
 
+            GLOBAL  UART1_WriteByte
+
             GLOBAL  rx_head, rx_tail, rx_buf, last_byte
             GLOBAL  parser_state, parser_checksum
             GLOBAL  stg_gx_l, stg_gx_h
@@ -22,6 +24,7 @@ PROCESSOR 18F87K22
 ;===========================================================
 ; parser.s
 ; - Consumes bytes from the UART RX ring buffer
+; - Echoes each consumed raw byte to UART1 for Python logging
 ; - Searches for 0xAA start byte
 ; - Collects 8 remaining bytes
 ; - Validates checksum over bytes 1..7
@@ -72,6 +75,10 @@ PS_HaveByte:
             ; Read one byte from the ring buffer.
             movf    INDF0, W, A
             movwf   last_byte, A
+
+            ; Echo the raw byte to UART1 for logging.
+            movf    last_byte, W, A
+            call    UART1_WriteByte
 
             ; Advance tail: (tail + 1) & 0x1F.
             incf    rx_tail, F, A
