@@ -286,7 +286,7 @@ DV_Inner:
 ;-----------------------------------------------------------
 ; UART1 init
 ; Assumes Fosc = 64 MHz
-; 115200 baud, BRGH = 1, BRG16 = 1, SPBRG = 0x008A
+; 38400 baud, BRGH = 1, BRG16 = 1, SPBRG = 0x008A
 ;-----------------------------------------------------------
 InitUART1:
             ; Enable UART1 peripheral module if PMD disabled it.
@@ -302,9 +302,10 @@ InitUART1:
             bsf     TXSTA1, 5, A
             bsf     BAUDCON1, 3, A
 
-            ; Set baud generator for 115200 baud at 64 MHz.
-            clrf    SPBRGH1, A
-            movlw   0x8A
+            ; Set baud generator for 38400 baud at 64 MHz.
+            movlw   0x01
+            movwf   SPBRGH1, A
+            movlw   0xA0
             movwf   SPBRG1, A
 
             ; Enable serial port and continuous receive.
