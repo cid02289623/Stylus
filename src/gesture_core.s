@@ -59,7 +59,7 @@
 ;-----------------------------------------------------------
             extrn   CalibrationService
             extrn   GestureClassifyAndReport
-            extrn   MakeAbsTmpDx
+            extrn   MakeAbsTmpDx, MakeAbsTmpDy
             extrn   UpdatePeakVPos, UpdatePeakVNeg
             extrn   UpdatePeakHPos, UpdatePeakHNeg
 
