@@ -65,13 +65,6 @@ DBG_SOF         equ 0xE2
 PEAK_THR_H      equ 0x08
 PEAK_THR_L      equ 0x00        ; 0x0800 = 2048 counts
 
-; Dominance check:
-;   winner must be > other + (other >> 2)
-; i.e. about 1.25x larger, less brittle than 1.5x
-;
-; This helps because your real captures are often mixed-axis.
-;-----------------------------------------------------------
-
 ;-----------------------------------------------------------
 ; Startup calibration constants
 ; 64 accepted still samples = about 1.28 s at 50 Hz.
@@ -87,6 +80,7 @@ CAL_SAMPLES     equ 64
 ;-----------------------------------------------------------
 CAL_DDELTA_H    equ 0x01
 CAL_DDELTA_L    equ 0x00        ; 0x0100 = 256 counts
+
 ;-----------------------------------------------------------
 ; Gesture RAM split into several smaller COMRAM psects
 ;-----------------------------------------------------------
@@ -146,9 +140,9 @@ tx_cksum:               ds 1
 dbg_flags:              ds 1
 
 ;-----------------------------------------------------------
-; More access RAM, separate psect
+; More access RAM, separate psects
 ;-----------------------------------------------------------
-                       psect   gest_acs2a,class=COMRAM,space=1,noexec
+            psect   gest_acs2a,class=COMRAM,space=1,noexec
 
 ; 24-bit sums for calibration averaging
 sumx_l:                 ds 1
@@ -251,11 +245,9 @@ GestureInit:
             clrf    tmp_dy_h, A
             clrf    shift_count, A
 
-            ; Clear previous calibration sample.
-            clrf    cal_prev_gx_l, A
-            clrf    cal_prev_gx_h, A
-            clrf    cal_prev_gz_l, A
-            clrf    cal_prev_gz_h, A
+            ; Previous calibration sample lives in normal RAM and is
+            ; ignored until cal_prev_valid is set, so no explicit clear
+            ; is needed here.
 
             ; RC5 on during startup calibration.
             bsf     LATC, 5, A
@@ -264,11 +256,6 @@ GestureInit:
 ;-----------------------------------------------------------
 ; ProcessTickService
 ; Called once per 20 ms processing slot.
-; - toggles RC0 heartbeat
-; - snapshots latest valid sample into proc_*
-; - latches whether this tick has a fresh parsed frame
-; - while calibration is active, runs calibration only
-; - after calibration, runs gesture logic only on fresh frames
 ;-----------------------------------------------------------
 ProcessTickService:
             ; Toggle RC0 every 25 ticks = 500 ms.
@@ -427,7 +414,7 @@ CalibrationStorePrev:
             movlw   0x01
             movwf   cal_prev_valid, A
             return
-	    
+
 ;-----------------------------------------------------------
 ; FinishCalibration
 ;-----------------------------------------------------------
