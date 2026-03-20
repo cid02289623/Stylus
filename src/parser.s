@@ -1,11 +1,11 @@
-            PROCESSOR 18F87K22
+PROCESSOR 18F87K22
             #include <xc.inc>
 
 ;===========================================================
 ; parser.s
 ; Owns: ParserService
 ; Consumes bytes from the UART RX ring buffer,
-; echoes each byte to UART1, searches for 0xAA SOF,
+; echoes only VALID frames to UART1 (after checksum passes),
 ; validates checksum, commits latest_* on good frame.
 ;
 ; All RAM declared in main.s - accessed here via extrn.
@@ -77,10 +77,6 @@ PS_HaveByte:
             ; Read one byte from the ring buffer.
             movf    INDF0, W, A
             movwf   last_byte, A
-
-            ; Echo the raw byte to UART1 for logging.
-            movf    last_byte, W, A
-            call    UART1_WriteByte
 
             ; Advance tail: (tail + 1) & 0x1F.
             incf    rx_tail, F, A
@@ -214,6 +210,27 @@ PS_Chk:
             movf    last_byte, W, A
             xorwf   parser_checksum, W, A
             bnz     PS_BadChecksum
+
+            ; Echo the complete valid frame to UART1 for logging.
+            ; Only valid frames are echoed - no corrupt bytes reach the PC.
+            movlw   0xAA
+            call    UART1_WriteByte
+            movf    stg_gx_l, W, A
+            call    UART1_WriteByte
+            movf    stg_gx_h, W, A
+            call    UART1_WriteByte
+            movf    stg_gy_l, W, A
+            call    UART1_WriteByte
+            movf    stg_gy_h, W, A
+            call    UART1_WriteByte
+            movf    stg_gz_l, W, A
+            call    UART1_WriteByte
+            movf    stg_gz_h, W, A
+            call    UART1_WriteByte
+            movf    stg_btn, W, A
+            call    UART1_WriteByte
+            movf    last_byte, W, A         ; last_byte = checksum byte
+            call    UART1_WriteByte
 
             ; Publish staged frame as latest valid data.
             movff   stg_gx_l, latest_gx_l
