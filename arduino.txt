@@ -1,0 +1,316 @@
+#include <Wire.h>
+
+// -----------------------------
+// LSM9DS1 accel/gyro I2C device
+// -----------------------------
+const uint8_t AG_ADDR          = 0x6B;
+const uint8_t REG_WHO_AM_I     = 0x0F;
+const uint8_t REG_CTRL_REG1_G  = 0x10;
+const uint8_t REG_CTRL_REG8    = 0x22;
+const uint8_t REG_OUT_X_L_G    = 0x18;
+
+// -----------------------------
+// Pins
+// -----------------------------
+const int LED_PIN = LED_BUILTIN;
+const int BUTTON_PIN = 2;
+
+// -----------------------------
+// UART / packet timing
+// -----------------------------
+const unsigned long UART_BAUD = 38400;
+const unsigned long FRAME_PERIOD_MS = 20;
+
+// -----------------------------
+// Packet constants
+// -----------------------------
+const uint8_t START_BYTE = 0xAA;
+const uint8_t FRAME_LEN  = 9;
+
+// -----------------------------
+// Optional USB debug to Serial Monitor
+// This does NOT go to the PIC.
+// -----------------------------
+const bool USB_DEBUG = true;
+
+// -----------------------------
+// Blink helpers
+// -----------------------------
+void blinkNTimes(int n, int onMs, int offMs, int endPauseMs) {
+  for (int i = 0; i < n; i++) {
+    digitalWrite(LED_PIN, HIGH);
+    delay(onMs);
+    digitalWrite(LED_PIN, LOW);
+    delay(offMs);
+  }
+  delay(endPauseMs);
+}
+
+void fatalBlink(int code) {
+  while (true) {
+    blinkNTimes(code, 100, 120, 900);
+  }
+}
+
+// -----------------------------
+// I2C helpers
+// -----------------------------
+bool writeRegister(uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(AG_ADDR);
+  Wire.write(reg);
+  Wire.write(value);
+  return (Wire.endTransmission() == 0);
+}
+
+bool readRegister(uint8_t reg, uint8_t &value) {
+  Wire.beginTransmission(AG_ADDR);
+  Wire.write(reg);
+
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+
+  if (Wire.requestFrom((int)AG_ADDR, 1) != 1) {
+    return false;
+  }
+
+  value = Wire.read();
+  return true;
+}
+
+bool readRegisters(uint8_t startReg, uint8_t *buffer, uint8_t len) {
+  Wire.beginTransmission(AG_ADDR);
+  Wire.write(startReg);
+
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+
+  if (Wire.requestFrom((int)AG_ADDR, (int)len) != len) {
+    return false;
+  }
+
+  for (uint8_t i = 0; i < len; i++) {
+    buffer[i] = Wire.read();
+  }
+
+  return true;
+}
+
+// -----------------------------
+// Gyro setup
+// -----------------------------
+void initGyro() {
+  uint8_t whoAmI = 0;
+
+  if (!readRegister(REG_WHO_AM_I, whoAmI)) {
+    fatalBlink(7);
+  }
+
+  if (whoAmI != 0x68) {
+    fatalBlink(2);
+  }
+
+  // Reboot memory content + block data update
+  if (!writeRegister(REG_CTRL_REG8, 0x44)) {
+    fatalBlink(4);
+  }
+
+  // Gyro enable, 119 Hz ODR, 245 dps FS
+  if (!writeRegister(REG_CTRL_REG1_G, 0x60)) {
+    fatalBlink(4);
+  }
+
+  delay(250);
+  blinkNTimes(3, 250, 250, 1200);
+}
+
+// -----------------------------
+// Gyro read
+// -----------------------------
+bool readGyroRaw(int16_t &gx, int16_t &gy, int16_t &gz) {
+  uint8_t raw[6];
+
+  if (!readRegisters(REG_OUT_X_L_G, raw, 6)) {
+    return false;
+  }
+
+  gx = (int16_t)((raw[1] << 8) | raw[0]);
+  gy = (int16_t)((raw[3] << 8) | raw[2]);
+  gz = (int16_t)((raw[5] << 8) | raw[4]);
+
+  return true;
+}
+
+// -----------------------------
+// Button logic
+// pressed -> bit 0 = 1
+// -----------------------------
+uint8_t readButtonBits() {
+  return (digitalRead(BUTTON_PIN) == LOW) ? 0x01 : 0x00;
+}
+
+// -----------------------------
+// Frame helpers
+// -----------------------------
+void packInt16LE(uint8_t *frame, int indexLow, int16_t value) {
+  frame[indexLow]     = (uint8_t)(value & 0xFF);
+  frame[indexLow + 1] = (uint8_t)((value >> 8) & 0xFF);
+}
+
+uint8_t computeChecksum(const uint8_t *frame) {
+  uint16_t sum = 0;
+  for (int i = 1; i <= 7; i++) {
+    sum += frame[i];
+  }
+  return (uint8_t)(sum & 0xFF);
+}
+
+void buildFrame(uint8_t *frame, int16_t gx, int16_t gy, int16_t gz, uint8_t buttonBits) {
+  frame[0] = START_BYTE;
+  packInt16LE(frame, 1, gx);
+  packInt16LE(frame, 3, gy);
+  packInt16LE(frame, 5, gz);
+  frame[7] = buttonBits;
+  frame[8] = computeChecksum(frame);
+}
+
+bool selfCheckFrame(const uint8_t *frame) {
+  if (frame[0] != START_BYTE) {
+    return false;
+  }
+
+  uint8_t expected = computeChecksum(frame);
+  return (frame[8] == expected);
+}
+
+// -----------------------------
+// Send frame to PIC on Serial1
+// -----------------------------
+void sendFrame(const uint8_t *frame) {
+  Serial1.write(frame, FRAME_LEN);
+}
+
+// -----------------------------
+// Optional USB debug print
+// This goes only to the PC Serial Monitor.
+// -----------------------------
+void debugPrintFrame(int16_t gx, int16_t gy, int16_t gz, uint8_t buttonBits, const uint8_t *frame) {
+  static unsigned long lastPrintMs = 0;
+  unsigned long now = millis();
+
+  // Print about 5 times per second
+  if (now - lastPrintMs < 200) {
+    return;
+  }
+  lastPrintMs = now;
+
+  Serial.print("gx=");
+  Serial.print(gx);
+  Serial.print(" gy=");
+  Serial.print(gy);
+  Serial.print(" gz=");
+  Serial.print(gz);
+  Serial.print(" btn=");
+  Serial.print((buttonBits & 0x01) ? 1 : 0);
+  Serial.print(" frame=");
+
+  for (int i = 0; i < FRAME_LEN; i++) {
+    if (frame[i] < 16) {
+      Serial.print('0');
+    }
+    Serial.print(frame[i], HEX);
+    Serial.print(' ');
+  }
+
+  Serial.println();
+}
+
+// -----------------------------
+// LED status
+// -----------------------------
+void updateLedStatus(uint8_t buttonBits) {
+  static uint8_t frameCounter = 0;
+  static bool ledState = false;
+
+  frameCounter++;
+
+  // Toggle every 25 frames = every 500 ms
+  if (frameCounter >= 25) {
+    frameCounter = 0;
+    ledState = !ledState;
+  }
+
+  // If button pressed, force LED on so button logic is obvious
+  if (buttonBits & 0x01) {
+    digitalWrite(LED_PIN, HIGH);
+  } else {
+    digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+  }
+}
+
+// -----------------------------
+// Setup
+// -----------------------------
+void setup() {
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  Wire.begin();
+  delay(100);
+
+  initGyro();
+
+  // USB serial for optional debug text to PC
+  if (USB_DEBUG) {
+    Serial.begin(115200);
+    delay(100);
+    Serial.println("Nano Every USB debug started");
+  }
+
+  // Hardware UART on Nano Every TX/RX pins -> PIC link
+  Serial1.begin(UART_BAUD);
+  delay(100);
+
+  if (USB_DEBUG) {
+    Serial.println("Serial1 started for PIC link");
+  }
+}
+
+// -----------------------------
+// Loop
+// -----------------------------
+void loop() {
+  static unsigned long nextSendMs = 0;
+  unsigned long now = millis();
+
+  if ((long)(now - nextSendMs) >= 0) {
+    nextSendMs += FRAME_PERIOD_MS;
+
+    int16_t gx = 0;
+    int16_t gy = 0;
+    int16_t gz = 0;
+
+    if (!readGyroRaw(gx, gy, gz)) {
+      fatalBlink(6);
+    }
+
+    uint8_t buttonBits = readButtonBits();
+
+    uint8_t frame[FRAME_LEN];
+    buildFrame(frame, gx, gy, gz, buttonBits);
+
+    if (!selfCheckFrame(frame)) {
+      fatalBlink(5);   // 5 flashes = frame/checksum problem
+    }
+
+    sendFrame(frame);              // goes to PIC on Serial1 TX pin
+    updateLedStatus(buttonBits);   // local Arduino status LED
+
+    if (USB_DEBUG) {
+      debugPrintFrame(gx, gy, gz, buttonBits, frame);
+    }
+  }
+}
